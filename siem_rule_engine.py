@@ -12,7 +12,10 @@ def parse_log_line(line):
     if match:
         raw_time = match.group(2)
 
-        # ✅ FIXED DATE + TIME PARSING
+        # ✅ REMOVE TIMEZONE (e.g., +0530 or +0000)
+        raw_time = re.sub(r"\s[+-]\d{4}", "", raw_time)
+
+        # ✅ HANDLE BOTH FORMATS
         if " " in raw_time:
             parts = raw_time.split(" ")
             date_part = parts[0]
@@ -204,7 +207,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "abc.txt"
+    input_txt = "rfi_logs.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
