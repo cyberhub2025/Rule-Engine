@@ -207,7 +207,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "rfi_logs.txt"
+    input_txt = "sqli.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
