@@ -1,21 +1,30 @@
 import re
 import pandas as pd
+from urllib.parse import unquote
 
 # ==============================
-# Stage 1: Parse Logs → Excel
+# FULL DECODE
 # ==============================
+def fully_decode(url):
+    prev = ""
+    url = str(url)
+    while prev != url:
+        prev = url
+        url = unquote(url)
+    return url
 
+
+# ==============================
+# PARSE LOGS
+# ==============================
 def parse_log_line(line):
     pattern = r'(\d+\.\d+\.\d+\.\d+).*?\[(.*?)\]\s+"(GET|POST)\s+(.*?)\s+HTTP.*?"\s+(\d{3})'
     match = re.search(pattern, line)
 
     if match:
         raw_time = match.group(2)
-
-        # ✅ REMOVE TIMEZONE (e.g., +0530 or +0000)
         raw_time = re.sub(r"\s[+-]\d{4}", "", raw_time)
 
-        # ✅ HANDLE BOTH FORMATS
         if " " in raw_time:
             parts = raw_time.split(" ")
             date_part = parts[0]
@@ -36,7 +45,6 @@ def parse_log_line(line):
 
 def txt_to_excel(input_file, output_excel):
     logs = []
-
     with open(input_file, "r", encoding="utf-8") as file:
         for line in file:
             parsed = parse_log_line(line)
@@ -49,32 +57,112 @@ def txt_to_excel(input_file, output_excel):
         print("⚠️ No valid logs found!")
     else:
         df.to_excel(output_excel, index=False)
-        print(f"✅ Logs converted to Excel → {output_excel}")
+        print(f"✅ Logs converted → {output_excel}")
 
 
 # ==============================
-# Stage 2: Attack Detection
+# ATTACK DETECTION
 # ==============================
 
 def detect_sqli(url):
-    return bool(re.search(r"(?i)(\bor\b|\band\b).*(=|like)|('|--|#|;|\bunion\b)", str(url)))
+    url = fully_decode(url).lower()
+
+    patterns = [
+        r"(\bor\b|\band\b)\s*['\"]?\d+['\"]?\s*=\s*['\"]?\d+['\"]?",
+        r"['\"]\s*or\s+['\"]?\d+['\"]?\s*=\s*['\"]?\d+",
+        r"union\s+select",
+        r"sleep\s*\(",
+        r"benchmark\s*\(",
+        r"information_schema",
+        r"--",
+        r"or\s*1\s*=\s*1",
+    ]
+
+    return any(re.search(p, url) for p in patterns)
 
 
-def detect_xss(url):
-    return bool(re.search(r"(?i)(<script>|</script>|alert\(|onerror=|onload=)", str(url)))
+def detect_xss_advanced(url):
+    raw = fully_decode(url).lower()
+    attacks = []
+
+    # 🔥 MULTI-DETECTION (no early return)
+
+    # Session hijacking / exfiltration
+    if re.search(r"(localstorage|sessionstorage|json\s*\.\s*stringify|fetch\s*\()", raw):
+        attacks.append("XSS - Session Hijacking / Data Exfiltration")
+
+    # Cookie stealing
+    if re.search(r"document\s*\.\s*cookie", raw):
+        attacks.append("XSS - Cookie Stealing")
+
+    # Keylogging
+    if re.search(r"(onkey(down|press|up)|addEventListener\s*\(\s*['\"]key)", raw):
+        attacks.append("XSS - Keylogging")
+
+    # Credential harvesting
+    if re.search(r"type\s*=\s*['\"]?\s*password", raw):
+        attacks.append("XSS - Credential Harvesting")
+
+    # Redirect
+    if re.search(r"(window\s*\.\s*location|location\s*\.\s*href)", raw):
+        attacks.append("XSS - Redirect")
+
+    # Alert payload
+    if re.search(r"<script[^>]*>\s*alert\s*\(", raw):
+        attacks.append("XSS - Alert Payload")
+
+    # Generic script
+    if not attacks and "<script" in raw:
+        attacks.append("XSS - Script Injection")
+
+    return attacks if attacks else None
 
 
 def detect_lfi(url):
-    return bool(re.search(r"(?i)(/etc/passwd|/etc/shadow|php://filter|proc/self)", str(url)))
+    url = fully_decode(url).lower()
+    return bool(re.search(r"(/etc/passwd|/etc/shadow|php://filter|proc/self)", url))
 
 
 def detect_rfi(url):
-    return bool(re.search(r"(?i)(http://|https://)", str(url)))
+    url = fully_decode(url).lower()
+
+    # RFI only when external URL is used as parameter value
+    return bool(re.search(
+        r"(file|page|include|path|template)\s*=\s*https?://",
+        url
+    ))
 
 
 def detect_traversal(url):
-    return bool(re.search(r"(\.\./|\.\.\\|%2e%2e%2f)", str(url)))
+    url = fully_decode(url).lower()
+    return bool(re.search(r"(\.\./|\.\.\\|%2e%2e%2f)", url))
 
+
+def detect_attack(url):
+    attacks = []
+
+    if detect_sqli(url):
+        attacks.append("SQL Injection")
+
+    xss = detect_xss_advanced(url)
+    if xss:
+        attacks.extend(xss)
+
+    if detect_lfi(url):
+        attacks.append("LFI")
+
+    if detect_rfi(url):
+        attacks.append("RFI")
+
+    if detect_traversal(url):
+        attacks.append("Directory Traversal")
+
+    return attacks if attacks else None
+
+
+# ==============================
+# BEHAVIOR DETECTION
+# ==============================
 
 def detect_dos_time_based(df, window_seconds=5, threshold=20):
     dos_ips = set()
@@ -83,10 +171,8 @@ def detect_dos_time_based(df, window_seconds=5, threshold=20):
         times = group["Timestamp"].dropna().sort_values()
 
         for i in range(len(times)):
-            window_start = times.iloc[i]
-            window_end = window_start + pd.Timedelta(seconds=window_seconds)
-
-            count = ((times >= window_start) & (times <= window_end)).sum()
+            window_end = times.iloc[i] + pd.Timedelta(seconds=window_seconds)
+            count = ((times >= times.iloc[i]) & (times <= window_end)).sum()
 
             if count >= threshold:
                 dos_ips.add(ip)
@@ -98,16 +184,17 @@ def detect_dos_time_based(df, window_seconds=5, threshold=20):
 def detect_bruteforce_time_based(df, window_seconds=10, threshold=5):
     bf_ips = set()
 
-    failed = df[df["Status Code"].astype(str).isin(["401", "403"])]
+    login_attempts = df[
+        (df["URL"].str.contains("login", case=False, na=False)) &
+        (df["Status Code"].astype(str) == "401")
+    ]
 
-    for ip, group in failed.groupby("IP"):
+    for ip, group in login_attempts.groupby("IP"):
         times = group["Timestamp"].dropna().sort_values()
 
         for i in range(len(times)):
-            window_start = times.iloc[i]
-            window_end = window_start + pd.Timedelta(seconds=window_seconds)
-
-            count = ((times >= window_start) & (times <= window_end)).sum()
+            window_end = times.iloc[i] + pd.Timedelta(seconds=window_seconds)
+            count = ((times >= times.iloc[i]) & (times <= window_end)).sum()
 
             if count >= threshold:
                 bf_ips.add(ip)
@@ -116,35 +203,14 @@ def detect_bruteforce_time_based(df, window_seconds=10, threshold=5):
     return bf_ips
 
 
-def detect_attack(url):
-    if detect_sqli(url):
-        return "SQL Injection"
-    elif detect_xss(url):
-        return "XSS"
-    elif detect_lfi(url):
-        return "LFI"
-    elif detect_rfi(url):
-        return "RFI"
-    elif detect_traversal(url):
-        return "Directory Traversal"
-    else:
-        return "Normal"
-
+# ==============================
+# MAIN ANALYSIS
+# ==============================
 
 def analyze_excel(input_excel, output_excel):
-    try:
-        df = pd.read_excel(input_excel)
-    except Exception as e:
-        print("❌ Error reading Excel:", e)
-        return
 
-    if df.empty:
-        print("⚠️ Excel file is empty!")
-        return
+    df = pd.read_excel(input_excel)
 
-    # ==============================
-    # CREATE CLEAN TIMESTAMP
-    # ==============================
     df["Timestamp"] = pd.to_datetime(
         df["Date"].astype(str) + " " + df["Time"].astype(str),
         format="%d/%b/%Y %H:%M:%S",
@@ -153,45 +219,24 @@ def analyze_excel(input_excel, output_excel):
 
     df = df.sort_values(by=["IP", "Timestamp"])
 
-    # ==============================
-    # BASE ATTACK DETECTION
-    # ==============================
+    # 🔥 MULTI ATTACK DETECTION
     df["Attack"] = df["URL"].apply(detect_attack)
 
-    # ==============================
-    # DoS + Brute Force Detection
-    # ==============================
+    # Flatten multiple attacks
+    df = df.explode("Attack")
+
+    # Behavior detection
     dos_ips = detect_dos_time_based(df)
     bf_ips = detect_bruteforce_time_based(df)
 
-    # ✅ FIX: Do NOT overwrite existing attacks
-    df.loc[
-        (df["IP"].isin(dos_ips)) & (df["Attack"] == "Normal"),
-        "Attack"
-    ] = "DoS"
+    df.loc[df["IP"].isin(dos_ips), "Attack"] = "DoS"
+    df.loc[df["IP"].isin(bf_ips), "Attack"] = "Brute Force"
 
-    df.loc[
-        (df["IP"].isin(bf_ips)) & (df["Attack"] == "Normal"),
-        "Attack"
-    ] = "Brute Force"
+    # Filter only attack rows
+    df = df[df["Attack"].notna()]
 
-    # ==============================
-    # FILTER ONLY THREATS
-    # ==============================
-    threats_df = df[df["Attack"] != "Normal"]
-
-    if threats_df.empty:
-        empty_df = pd.DataFrame(columns=["IP", "Attack", "Attack Count"])
-        empty_df.to_excel(output_excel, index=False)
-        print("✅ No attacks detected. Empty report generated.")
-        return
-
-    # ==============================
-    # GROUPING
-    # ==============================
     summary_df = (
-        threats_df
-        .groupby(["IP", "Attack"])
+        df.groupby(["IP", "Attack"])
         .size()
         .reset_index(name="Attack Count")
     )
@@ -207,11 +252,11 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "sqli.txt"
+    input_txt = "xss.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
     txt_to_excel(input_txt, raw_excel)
     analyze_excel(raw_excel, threat_excel)
 
-    print("🚀 Full pipeline executed successfully!")
+    print("🚀 Done!")
