@@ -45,7 +45,7 @@ def parse_log_line(line):
 
 def txt_to_excel(input_file, output_excel):
     logs = []
-    with open(input_file, "r", encoding="utf-8") as file:
+    with open(input_file, "r", encoding="cp1252") as file:
         for line in file:
             parsed = parse_log_line(line)
             if parsed:
@@ -84,36 +84,44 @@ def detect_sqli(url):
 def detect_xss_advanced(url):
     raw = fully_decode(url).lower()
     attacks = []
+    flag = True
 
-    # 🔥 MULTI-DETECTION (no early return)
+    if flag:
 
-    # Session hijacking / exfiltration
-    if re.search(r"(localstorage|sessionstorage|json\s*\.\s*stringify|fetch\s*\()", raw):
-        attacks.append("XSS - Session Hijacking / Data Exfiltration")
+        # Session hijacking (storage-based)
+        if re.search(r"(localstorage|sessionstorage|json\s*\.\s*stringify)", raw):
+            attacks.append("Session Hijacking")
+            flag = False
+        
+        # 🍪 Cookie stealing (separate detection)
+        elif re.search(r"document\s*\.\s*cookie", raw):
+            attacks.append("Cookie Stealing")
+            flag = False
 
-    # Cookie stealing
-    if re.search(r"document\s*\.\s*cookie", raw):
-        attacks.append("XSS - Cookie Stealing")
+        # Keylogging
+        elif re.search(r"(onkey(down|press|up)|addEventListener\s*\(\s*['\"]key)", raw):
+            attacks.append("Keylogging")
+            flag = False
 
-    # Keylogging
-    if re.search(r"(onkey(down|press|up)|addEventListener\s*\(\s*['\"]key)", raw):
-        attacks.append("XSS - Keylogging")
+        # Data exfiltration
+        elif re.search(r"(fetch\s*\()", raw):
+            attacks.append("Data Exfiltration")
+            flag = False
 
-    # Credential harvesting
-    if re.search(r"type\s*=\s*['\"]?\s*password", raw):
-        attacks.append("XSS - Credential Harvesting")
+        # Credential harvesting
+        elif re.search(r"type\s*=\s*['\"]?\s*password", raw):
+            attacks.append("Credential Harvesting")
+            flag = False
 
-    # Redirect
-    if re.search(r"(window\s*\.\s*location|location\s*\.\s*href)", raw):
-        attacks.append("XSS - Redirect")
+    if flag:
+        if re.search(r"(window\s*\.\s*location|location\s*\.\s*href)", raw):
+            attacks.append("XSS Redirect")
 
-    # Alert payload
-    if re.search(r"<script[^>]*>\s*alert\s*\(", raw):
-        attacks.append("XSS - Alert Payload")
+        elif re.search(r"<script[^>]*>\s*alert\s*\(", raw):
+            attacks.append("XSS Alert")
 
-    # Generic script
-    if not attacks and "<script" in raw:
-        attacks.append("XSS - Script Injection")
+        elif "<script" in raw:
+            attacks.append("XSS")
 
     return attacks if attacks else None
 
@@ -252,7 +260,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "xss.txt"
+    input_txt = "input.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
