@@ -115,10 +115,10 @@ def detect_xss_advanced(url):
 
     if flag:
         if re.search(r"(window\s*\.\s*location|location\s*\.\s*href)", raw):
-            attacks.append("XSS Redirect")
+            attacks.append("XSS")
 
         elif re.search(r"<script[^>]*>\s*alert\s*\(", raw):
-            attacks.append("XSS Alert")
+            attacks.append("XSS")
 
         elif "<script" in raw:
             attacks.append("XSS")
@@ -260,7 +260,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "input.txt"
+    input_txt = "xss.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
