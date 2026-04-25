@@ -248,9 +248,8 @@ def analyze_excel(input_excel, output_excel):
     # Flatten multiple attacks
     df = df.explode("Attack")
 
-    # Behavior detection
     # ------------------------------
-    # DoS ROW-LEVEL DETECTION (FIXED)
+    # DoS ROW-LEVEL DETECTION
     # ------------------------------
     df["DoS_Flag"] = False
 
@@ -261,9 +260,8 @@ def analyze_excel(input_excel, output_excel):
             window_end = times.iloc[i] + pd.Timedelta(seconds=2)
             mask = (times >= times.iloc[i]) & (times <= window_end)
 
-            if mask.sum() >= 30:   # stricter threshold
+            if mask.sum() >= 30:
                 df.loc[group.index[mask], "DoS_Flag"] = True
-
 
     # ------------------------------
     # BRUTE FORCE ROW-LEVEL DETECTION
@@ -285,19 +283,93 @@ def analyze_excel(input_excel, output_excel):
             if mask.sum() >= 5:
                 df.loc[group.index[mask], "BF_Flag"] = True
 
-
     # APPLY LABELS
     df.loc[df["DoS_Flag"], "Attack"] = "DoS"
     df.loc[df["BF_Flag"], "Attack"] = "Brute Force"
 
-    # Filter only attack rows
-    df = df[df["Attack"].notna()]
+    # ------------------------------
+    # ALERT GENERATION (FINAL FIX)
+    # ------------------------------
+    alerts = []
 
-    summary_df = (
-        df.groupby(["IP", "Attack"])
-        .size()
-        .reset_index(name="Attack Count")
-    )
+    # -------- DoS WINDOW --------
+    dos_df = df[df["DoS_Flag"]]
+
+    for (ip, url), group in dos_df.groupby(["IP", "URL"]):
+        times = group["Timestamp"].sort_values().tolist()
+
+        i = 0
+        while i < len(times):
+            start = times[i]
+            window_end = start + pd.Timedelta(seconds=2)
+
+            count = 0
+            j = i
+
+            while j < len(times) and times[j] <= window_end:
+                count += 1
+                j += 1
+
+            if count >= 30:
+                alerts.append({
+                    "IP": ip,
+                    "Attack": "DoS",
+                    "Start Time": start,
+                    "End Time": times[j-1],
+                    "Attack Count": count
+                })
+
+            i = j
+
+    # -------- BRUTE FORCE WINDOW --------
+    bf_df = df[df["BF_Flag"]]
+
+    for ip, group in bf_df.groupby("IP"):
+        times = group["Timestamp"].sort_values().tolist()
+
+        i = 0
+        while i < len(times):
+            start = times[i]
+            window_end = start + pd.Timedelta(seconds=10)
+
+            count = 0
+            j = i
+
+            while j < len(times) and times[j] <= window_end:
+                count += 1
+                j += 1
+
+            if count >= 5:
+                alerts.append({
+                    "IP": ip,
+                    "Attack": "Brute Force",
+                    "Start Time": start,
+                    "End Time": times[j-1],
+                    "Attack Count": count
+                })
+
+            i = j
+
+    # -------- OTHER ATTACKS --------
+    other_df = df[
+        (~df["DoS_Flag"]) &
+        (~df["BF_Flag"]) &
+        (df["Attack"].notna())
+    ]
+
+    for (ip, attack), group in other_df.groupby(["IP", "Attack"]):
+        times = group["Timestamp"].sort_values()
+
+        alerts.append({
+            "IP": ip,
+            "Attack": attack,
+            "Start Time": times.iloc[0],
+            "End Time": times.iloc[-1],
+            "Attack Count": len(times)
+        })
+
+    # FINAL OUTPUT
+    summary_df = pd.DataFrame(alerts)
 
     summary_df.to_excel(output_excel, index=False)
 
@@ -310,7 +382,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "allinone.log"
+    input_txt = "directorynew.txt"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
