@@ -18,7 +18,7 @@ def fully_decode(url):
 # PARSE LOGS
 # ==============================
 def parse_log_line(line):
-    pattern = r'(\d+\.\d+\.\d+\.\d+).*?\[(.*?)\]\s+"(GET|POST)\s+(.*?)\s+HTTP.*?"\s+(\d{3})'
+    pattern = r'(\d+\.\d+\.\d+\.\d+).*?\[(.*?)\]\s+"?(GET|POST)\s+(.*?)\s+HTTP.*?"?\s+(\d{3})'
     match = re.search(pattern, line)
 
     if match:
@@ -45,11 +45,26 @@ def parse_log_line(line):
 
 def txt_to_excel(input_file, output_excel):
     logs = []
-    with open(input_file, "r", encoding="cp1252") as file:
-        for line in file:
-            parsed = parse_log_line(line)
-            if parsed:
-                logs.append(parsed)
+    encodings = ['cp1252', 'utf-16', 'utf-8']
+    file_opened = False
+    for enc in encodings:
+        try:
+            with open(input_file, "r", encoding=enc) as file:
+                for line in file:
+                    parsed = parse_log_line(line)
+                    if parsed:
+                        logs.append(parsed)
+            file_opened = True
+            break
+        except UnicodeDecodeError:
+            continue
+    if not file_opened:
+        # Last resort with errors='replace'
+        with open(input_file, "r", encoding='utf-8', errors='replace') as file:
+            for line in file:
+                parsed = parse_log_line(line)
+                if parsed:
+                    logs.append(parsed)
 
     df = pd.DataFrame(logs)
 
@@ -234,11 +249,46 @@ def analyze_excel(input_excel, output_excel):
     df = df.explode("Attack")
 
     # Behavior detection
-    dos_ips = detect_dos_time_based(df)
-    bf_ips = detect_bruteforce_time_based(df)
+    # ------------------------------
+    # DoS ROW-LEVEL DETECTION (FIXED)
+    # ------------------------------
+    df["DoS_Flag"] = False
 
-    df.loc[df["IP"].isin(dos_ips), "Attack"] = "DoS"
-    df.loc[df["IP"].isin(bf_ips), "Attack"] = "Brute Force"
+    for (ip, url), group in df.groupby(["IP", "URL"]):
+        times = group["Timestamp"].dropna().sort_values()
+
+        for i in range(len(times)):
+            window_end = times.iloc[i] + pd.Timedelta(seconds=2)
+            mask = (times >= times.iloc[i]) & (times <= window_end)
+
+            if mask.sum() >= 30:   # stricter threshold
+                df.loc[group.index[mask], "DoS_Flag"] = True
+
+
+    # ------------------------------
+    # BRUTE FORCE ROW-LEVEL DETECTION
+    # ------------------------------
+    df["BF_Flag"] = False
+
+    login_df = df[
+        (df["URL"].str.contains("login", case=False, na=False)) &
+        (df["Status Code"].astype(str) == "401")
+    ]
+
+    for ip, group in login_df.groupby("IP"):
+        times = group["Timestamp"].dropna().sort_values()
+
+        for i in range(len(times)):
+            window_end = times.iloc[i] + pd.Timedelta(seconds=10)
+            mask = (times >= times.iloc[i]) & (times <= window_end)
+
+            if mask.sum() >= 5:
+                df.loc[group.index[mask], "BF_Flag"] = True
+
+
+    # APPLY LABELS
+    df.loc[df["DoS_Flag"], "Attack"] = "DoS"
+    df.loc[df["BF_Flag"], "Attack"] = "Brute Force"
 
     # Filter only attack rows
     df = df[df["Attack"].notna()]
@@ -260,7 +310,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "xss.txt"
+    input_txt = "allinone.log"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
