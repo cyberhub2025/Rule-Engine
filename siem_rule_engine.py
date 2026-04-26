@@ -141,24 +141,16 @@ def detect_xss_advanced(url):
     return attacks if attacks else None
 
 
-def detect_lfi(url):
+def detect_directory_traversal(url):
     url = fully_decode(url).lower()
-    return bool(re.search(r"(/etc/passwd|/etc/shadow|php://filter|proc/self)", url))
-
-
-def detect_rfi(url):
-    url = fully_decode(url).lower()
-
-    # RFI only when external URL is used as parameter value
-    return bool(re.search(
-        r"(file|page|include|path|template)\s*=\s*https?://",
-        url
-    ))
-
-
-def detect_traversal(url):
-    url = fully_decode(url).lower()
-    return bool(re.search(r"(\.\./|\.\.\\|%2e%2e%2f)", url))
+    return bool(
+        re.search(r"(\.\./|\.\.\\|%2e%2e%2f)", url)
+        or re.search(r"(/etc/passwd|/etc/shadow|php://filter|proc/self)", url)
+        or re.search(
+            r"(file|page|include|path|template)\s*=\s*https?://",
+            url
+        )
+    )
 
 
 def detect_attack(url):
@@ -171,13 +163,7 @@ def detect_attack(url):
     if xss:
         attacks.extend(xss)
 
-    if detect_lfi(url):
-        attacks.append("LFI")
-
-    if detect_rfi(url):
-        attacks.append("RFI")
-
-    if detect_traversal(url):
+    if detect_directory_traversal(url):
         attacks.append("Directory Traversal")
 
     return attacks if attacks else None
@@ -382,7 +368,7 @@ def analyze_excel(input_excel, output_excel):
 
 if __name__ == "__main__":
 
-    input_txt = "directorynew.txt"
+    input_txt = "allinone.log"
     raw_excel = "raw_logs.xlsx"
     threat_excel = "threat_logs.xlsx"
 
